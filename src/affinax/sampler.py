@@ -1,3 +1,5 @@
+# Adapted to JAX from github.com/justinalsing/affine
+
 import jax
 import jax.numpy as jnp
 from tqdm import trange
@@ -11,9 +13,11 @@ def affine_step(log_prob, key, current_state1, current_state2, n_walkers, n_para
     # first set of walkers:
     
     logp_current1 = log_prob(current_state1, *args)
-    # proposals
-    partners1 = current_state2.at[jax.random.randint(key, (n_walkers), 0, n_walkers)].get()
-    z1 = 0.5*(jax.random.uniform(key, (n_walkers))+1)**2
+    # proposals (z from arxiv.org/pdf/1202.3665)
+    key, subkey = jax.random.split(key)
+    partners1 = current_state2.at[jax.random.randint(subkey, (n_walkers), 0, n_walkers)].get()
+    key, subkey = jax.random.split(key)
+    z1 = 1/jnp.sqrt(jax.random.uniform(subkey, (n_walkers)) * 1.5 + 0.5)
     proposed_state1 = partners1 + jnp.transpose(z1*jnp.transpose(current_state1 - partners1))
 
     # target log prob at proposed points
@@ -24,7 +28,8 @@ def affine_step(log_prob, key, current_state1, current_state2, n_walkers, n_para
     p_accept1 = jnp.minimum(jnp.ones(n_walkers), z1**(n_params-1)*jnp.exp(logp_proposed1 - logp_current1) )
 
     # accept or not
-    accept1_ = (jax.random.uniform(key, (n_walkers)) <= p_accept1)
+    key, subkey = jax.random.split(key)
+    accept1_ = (jax.random.uniform(subkey, (n_walkers)) <= p_accept1)
     accept1 = jnp.astype(accept1_, jnp.float32)
 
     # update the state
@@ -35,9 +40,11 @@ def affine_step(log_prob, key, current_state1, current_state2, n_walkers, n_para
     
     logp_current2 = log_prob(current_state2, *args)
 
-    # proposals
-    partners2 = current_state1.at[jax.random.randint(key, (n_walkers), 0, n_walkers)].get()
-    z2 = 0.5*(jax.random.uniform(key, (n_walkers))+1)**2
+    # proposals (z from arxiv.org/pdf/1202.3665)
+    key, subkey = jax.random.split(key)
+    partners2 = current_state2.at[jax.random.randint(subkey, (n_walkers), 0, n_walkers)].get()
+    key, subkey = jax.random.split(key)
+    z2 = 1/jnp.sqrt(jax.random.uniform(subkey, (n_walkers)) * 1.5 + 0.5)
     proposed_state2 = partners2 + jnp.transpose(z2*jnp.transpose(current_state2 - partners2))
 
     # target log prob at proposed points
@@ -48,7 +55,8 @@ def affine_step(log_prob, key, current_state1, current_state2, n_walkers, n_para
     p_accept2 = jnp.minimum(jnp.ones(n_walkers), z2**(n_params-1)*jnp.exp(logp_proposed2 - logp_current2) )
 
     # accept or not
-    accept2_ = (jax.random.uniform(key, (n_walkers)) <= p_accept2)
+    key, subkey = jax.random.split(key)
+    accept2_ = (jax.random.uniform(subkey, (n_walkers)) <= p_accept2)
     accept2 = jnp.astype(accept2_, jnp.float32)
 
     # update the state
@@ -56,7 +64,7 @@ def affine_step(log_prob, key, current_state1, current_state2, n_walkers, n_para
     logp_current2 = jnp.where(accept2_, logp_proposed2, logp_current2)
 
     # return current state for both sets of walkers
-    return jnp.concatenate([current_state1, current_state2], axis=0)
+    return jnp.concatenate([current_state1, current_state2], axis=0), key
 
 
 def affine_sample(log_prob, n_steps, p0, args=[], key=None, progressbar=True):
@@ -64,19 +72,13 @@ def affine_sample(log_prob, n_steps, p0, args=[], key=None, progressbar=True):
     if key is None:
         key = jax.random.PRNGKey(time.time_ns())
     
-    # split the current state
+    # split the current state in two sets of walkers
     current_state1, current_state2 = p0
     
-    # pull out the number of parameters and walkers
+    # infer number of parameters and walkers from state
     n_walkers, n_params = current_state1.shape
 
-    # initial target log prob for the walkers (and set any nans to -inf)...
-    logp_current1 = log_prob(current_state1, *args)
-    logp_current2 = log_prob(current_state2, *args)
-    logp_current1 = jnp.where(jnp.isnan(logp_current1), jnp.ones_like(logp_current1)*jnp.log(0.), logp_current1)
-    logp_current2 = jnp.where(jnp.isnan(logp_current2), jnp.ones_like(logp_current2)*jnp.log(0.), logp_current2)
-
-    # holder for the whole chain
+    # array to store whole chain
     chain = jnp.zeros([n_steps, 2*n_walkers, n_params])
     chain = chain.at[0].set(jnp.concatenate([current_state1, current_state2], axis=0))
     
@@ -85,9 +87,15 @@ def affine_sample(log_prob, n_steps, p0, args=[], key=None, progressbar=True):
 
     # MCMC loop
     for epoch in loop(1, n_steps):
-
+        
+        # generate new keys
+        key, subkey = jax.random.split(key)
+        
         # take a step
-        chain = chain.at[epoch].set(affine_step(log_prob, key, chain[epoch-1, :n_walkers], chain[epoch-1, n_walkers:], n_walkers, n_params, *args))
+        state, key = affine_step(log_prob, subkey, chain[epoch-1, :n_walkers], chain[epoch-1, n_walkers:], n_walkers, n_params, *args)
+        
+        # append the new state to the chain
+        chain = chain.at[epoch].set(state)
     
     # return the chain
     return chain
