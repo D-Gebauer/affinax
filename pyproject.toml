@@ -1,0 +1,20 @@
+[project]
+name = "affinax"
+version = "0.1.0"
+authors = [
+  { name="David Gebauer", email="git@gebauer.ai" },
+]
+description = "A small package for measuring correlation functions"
+readme = "README.md"
+requires-python = ">=3.12"
+classifiers = [
+    "Programming Language :: Python :: 3",
+]
+dependencies = [
+    "tqdm>=4.60",
+    "jax>=0.4.37",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/D-Gebauer/affinax"
+
